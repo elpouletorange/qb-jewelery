@@ -50,11 +50,6 @@ local function IsWearingHandshoes()
 end
 
 local function smashVitrine(k)
-    if not firstAlarm then
-        TriggerServerEvent('police:server:policeAlert', 'Suspicious Activity')
-        firstAlarm = true
-    end
-
     QBCore.Functions.TriggerCallback('qb-jewellery:server:getCops', function(cops)
         if cops >= Config.RequiredCops then
             local animDict = "missheist_jewel"
@@ -77,7 +72,10 @@ local function smashVitrine(k)
             }, {}, {}, {}, function() -- Done
                 TriggerServerEvent('qb-jewellery:server:vitrineReward', k)
                 TriggerServerEvent('qb-jewellery:server:setTimeout')
-                TriggerServerEvent('police:server:policeAlert', 'Robbery in progress')
+                if not firstAlarm then                                                             --Code moved here to prevent multiple notif.
+                    TriggerServerEvent('police:server:policeAlert', 'Robbery in progress')
+                    firstAlarm = true
+                end
                 smashing = false
                 TaskPlayAnim(ped, animDict, "exit", 3.0, 3.0, -1, 2, 0, 0, 0, 0)
             end, function() -- Cancel
@@ -105,11 +103,15 @@ local function smashVitrine(k)
 end
 
 -- Events
+local alarmon = false                                                                               --new boolean value for Client Alarm State
 
 RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
 	QBCore.Functions.TriggerCallback('qb-jewellery:server:getVitrineState', function(result)
 		Config.Locations = result
 	end)
+    QBCore.Functions.TriggerCallback('qb-jewellery:server:getAlarmState', function(result2)         --Load alarm state from server on spawn--
+        alarmon = result2
+    end)
 end)
 
 RegisterNetEvent('qb-jewellery:client:setVitrineState', function(stateType, state, k)
@@ -139,8 +141,10 @@ local function Listen4Control(case)
                 listen = false
                 if not Config.Locations[case]["isBusy"] and not Config.Locations[case]["isOpened"] then
                     exports['qb-core']:KeyPressed()
-                        if validWeapon() then
+                        if validWeapon() and alarmon then                                                           --validWeapon AND alarmon
                             smashVitrine(case)
+                        elseif not alarmon then
+                            QBCore.Functions.Notify('You have to trigger the alarm by shooting', 'error')
                         else
                             QBCore.Functions.Notify(Lang:t('error.wrong_weapon'), 'error')
                         end
@@ -206,4 +210,117 @@ CreateThread(function()
             end)
         end
     end
+end)
+
+
+-- NEW CODE START HERE
+
+
+--Events
+local playingsound = false
+soundid = GetSoundId()
+
+RegisterNetEvent('qb-jewellery:client:setAlarm', function(alarmstate2)
+    if alarmstate2 then
+        alarmon = true
+    else
+        firstAlarm = false
+        alarmon = false
+        playingsound = false
+        StopSound(soundid)
+        exports['qb-core']:HideText()
+    end
+end)
+
+--Functions
+local listenforalarm = false
+local function Listen4Alarm()                                                                                           -- Triggered by PolyZone box Inside ++
+    listenforalarm = true
+    CreateThread(function()
+        while listenforalarm do
+            if alarmon then
+                listenforalarm = false
+                if not playingsound then
+                    PlaySoundFromCoord(soundid, "VEHICLES_HORNS_AMBULANCE_WARNING", -622.01, -230.72, 40.01)            -- Change alarm sound coords here -- alarm coords
+                    exports['qb-core']:DrawText('There is an alarm going on!', 'left')
+                end
+                playingsound = true
+            end
+            Wait(500)                                                                                                   -- Wait 500ms to check if alarm is on again --
+        end
+    end)
+end
+
+local listenforshot = false
+local function Listen4Shot()
+    listenforshot = true
+    CreateThread(function()
+        while listenforshot do
+            if IsPedShooting(GetPlayerPed(-1)) then                                                                     --Is the player currently shooting
+                listenforshot = false
+                QBCore.Functions.TriggerCallback('qb-jewellery:server:getCops', function(cops)
+                    if cops >= Config.RequiredCops then
+                        QBCore.Functions.TriggerCallback('qb-scoreboard:server:GetConfig', function(config)
+                            if not config.jewellery.busy then
+                                TriggerServerEvent('qb-jewellery:server:setAlarm', true)
+                                TriggerServerEvent('police:server:policeAlert', 'Alarm alert')
+                            else
+                                QBCore.Functions.Notify('Robbery on cooldown! Try later.') -- scoreboard said jewelery is unavailable / on cooldown
+                            end
+                        end)
+                    else
+                        QBCore.Functions.Notify('There is not enough cops right now!')
+                    end
+                end)
+            end
+            Wait(1)                                                                                                        -- Wait 1ms to check if player is shooting -- Need fast thread to catch shooting frame -- Need to test 2ms or more
+        end
+    end)
+end
+
+-- Threads
+
+CreateThread(function() -- ALARM ZONE
+    local boxZone = BoxZone:Create(vector3(-632.0, -249.0, 40.0), 200, 150, {                                              --Listen for Alarm sound box
+        name="box_zone_jewelery_alarm",
+        heading = 30,
+        minZ = 30,
+        maxZ = 50,
+        debugPoly=false,
+        })
+        boxZone:onPlayerInOut(function(isPointInside) --JOUER ALARME SI EN COURS ET ARRET QUAND EN DEHORS DE LA ZONE
+        if isPointInside then
+            Listen4Alarm()
+        else
+            if playingsound then
+                StopSound(soundid)
+                exports['qb-core']:HideText()
+                playingsound = false
+            end
+        end
+    end)
+end)
+
+CreateThread(function() --SHOOT ZONE
+    local boxZone2 = BoxZone:Create(vector3(-624.0, -232.0, 40.0), 20, 17, {                                                --Listen for Shooting box
+        name="box_zone_jewelery_shot",
+        heading = 36,
+        minZ = 35,
+        maxZ = 42,
+        debugPoly=false,
+    })
+    boxZone2:onPlayerInOut(function(isPointInside)
+        if isPointInside then
+            if not alarmon then
+                if not notified then
+                    notified = true
+                    QBCore.Functions.Notify('Shoot to start robbery')
+                end
+                Listen4Shot()
+            end
+        else
+            listenforshot = false
+            notified = false
+        end
+    end)
 end)
