@@ -133,3 +133,31 @@ RegisterNetEvent('qb-jewellery:server:setTimeout', function()
         end)
     end
 end)
+
+-- NEW SCRIPT HERE
+
+local alarmon = false
+
+QBCore.Functions.CreateCallback('qb-jewellery:server:getAlarmState', function(_, cb)
+    cb(alarmon)
+end)
+
+RegisterNetEvent('qb-jewellery:server:setAlarm', function(alarmstate)
+
+    if alarmstate then
+        TriggerClientEvent('qb-jewellery:client:setAlarm', -1, true)
+        alarmon = true
+    else
+        TriggerClientEvent('qb-jewellery:client:setAlarm', -1, false)
+        alarmon = false
+    end
+end)
+
+QBCore.Commands.Add("stopalarm", "", {}, false, function(source)
+    local src = source
+    local Player = QBCore.Functions.GetPlayer(src)
+    if Player.PlayerData.job.name == 'police' then
+        TriggerClientEvent('qb-jewellery:client:setAlarm', -1, false)
+        alarmon = false
+    end
+end)
